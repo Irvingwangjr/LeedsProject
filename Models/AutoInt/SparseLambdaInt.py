@@ -1,0 +1,42 @@
+from collections import OrderedDict
+from typing import List
+from Models.Layers.SparseAttentionLayer import SparseAttentionLayer, SparseLambdaAttentionLayer
+from Models.BaseModelV2 import BaseModelV2, BaseEmbedFormat
+from torch import nn
+import torch
+from Utils.HyperParamLoadModule import FeatureInfo, HyperParam, FEATURETYPE
+from Models.Modules.MatchModule import AllConcatMlpV2
+from Models.Modules.FusionModule import MultiLayerTransformer
+
+
+class SparseLambdaInt(BaseModelV2):
+    def __init__(self, featureInfo: List[FeatureInfo], embedFormat: BaseEmbedFormat):
+        self.nameList = [i.featureName for i in featureInfo if (
+                i.enable == True and i.featureType == FEATURETYPE.USER)]
+        super().__init__(embedFormat)
+        self.featureNum = HyperParam.AutoIntFeatureNum
+        # self.topk = [1, 3, 3, 5, 2, 1]
+        # self.topk = [1, 20, 10, 10, 10,]
+        self.topk=[1,10,5,5,2,1]
+        self.depth = len(self.topk)-1
+        self.headNum = HyperParam.AutoIntHeadNumList
+        self.featureDim = HyperParam.AutoIntFeatureDim
+        self.transformer = nn.ModuleList([SparseLambdaAttentionLayer(self.featureNum, self.featureDim
+                                                                     // 4, self.topk[i] * self.featureNum,
+                                                                     self.featureDim,
+                                                                     self.topk[i + 1])
+                                          for i in range(self.depth)])
+        self.output = None
+        HyperParam.AutoIntMatchMlpDims[0] = HyperParam.AutoIntFeatureNum * sum(self.topk) * HyperParam.AutoIntFeatureDim
+        self.mlp = AllConcatMlpV2(HyperParam.AutoIntMatchMlpDims)
+
+    def mainForward(self, feature):
+        query = feature
+        context = feature
+        result = [query]
+        for i in range(self.depth):
+            context = self.transformer[i](query, context)
+            result.append(context)
+        out = torch.cat(result, dim=1)
+        result = self.mlp(None, None, None, None, None, None, out)
+        return result
