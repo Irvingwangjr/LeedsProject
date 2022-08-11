@@ -37,7 +37,7 @@ class STRTransform(nn.Module):
         return self.outPut
 
 
-class TopDownIADNN(BaseModelV2):
+class FeatNet(BaseModelV2):
     def __init__(self, featureInfo: List[FeatureInfo], embedFormat: BaseEmbedFormat):
         self.nameList = [i.featureName for i in featureInfo if (
                 i.enable == True and i.featureType == FEATURETYPE.USER)]
@@ -75,31 +75,22 @@ class TopDownIADNN(BaseModelV2):
         self.out = LinearTransform(
             [self.headNum, 1], True)
         self.act = nn.Sigmoid()
-#[b,f,d]
+        
     def mainForward(self, feature):
         feature = self.layerNorm(feature)
         batch = feature.shape[0]
-#[B,F,C]
-#[b,1,f,d] *[B,c,f]->[B,c,f,d]
         cluster: torch.Tensor = self.classDNN(feature)
         pruning = self.STR(cluster, self.pruningWeight)
-        # print(torch.count_nonzero(cluster.transpose(1, 2).detach(), dim=2))
-        # print(f"cluster dim {cluster.shape}")
-        # return pruning
         clusterInput = torch.transpose(pruning, 1, 2).unsqueeze(3) * feature.unsqueeze(1)
         #[b.c.f.d]
         #[128,10,23,1,16] [1,10,23,16,16]->[128,10,23,1,16]
         key: torch.Tensor = torch.matmul(clusterInput.unsqueeze(3), self.KV).squeeze(3)
         # q:[1,10,92,16] [128,10,23,16]->[128,10,92,23]
         score = torch.relu(torch.matmul(self.query, key.transpose(2, 3)))
-        # return score
         #[128,10,92,23] [128,10,23,16]->[128,10,92,16]
         represent = self.layerNormPool(torch.matmul(score, clusterInput))
-        #[]
-        # print(f"cclusterInput:size{clusterInput.shape}")
         cluster = represent.reshape(-1, self.headNum, 1, self.poolingDim * self.featureDim)
         fuse = self.featureDNN(cluster).squeeze()
-        # print(fuse.shape)
         setOut = self.out(fuse.reshape(batch, -1))
         out = self.act(setOut)
         return out
